@@ -4,6 +4,12 @@ from PIL import ImageGrab
 import pyautogui
 import pygetwindow as gw
 import time
+import os
+
+
+DEMO = False
+QUICKSAVE_RELOAD = False
+
 
 def capture_screen():
     screen = ImageGrab.grab()
@@ -11,11 +17,13 @@ def capture_screen():
     screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGR2GRAY)
     return screen_gray, screen_np.shape[1], screen_np.shape[0]
 
+
 def load_template(template_path):
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
     if template is None:
         raise ValueError(f"Template image at path {template_path} could not be loaded.")
     return template
+
 
 def resize_image(image, max_width, max_height):
     h, w = image.shape[:2]
@@ -26,77 +34,85 @@ def resize_image(image, max_width, max_height):
         return resized_image
     return image
 
+
 def is_near_existing_enemies(new_coord, enemies, search_radius):
-    for coord in enemies.values():
+    for coord in enemies:
         if (abs(new_coord[0] - coord[0]) <= search_radius) and (abs(new_coord[1] - coord[1]) <= search_radius):
             return True
     return False
 
-def scan_for_enemies(threshold=0.8, search_radius=20):
+
+def scan_for_enemies(scale, threshold, search_radius, borders):
+    # scales = np.linspace(0.5, 1.5, 20)
     print('Scan for enemies...')
     screen_gray, screen_width, screen_height = capture_screen()
-    enemy_template = load_template('enemy_template.png')
+    enemy_templates = dict()
     
-    found = None
-    scales = np.linspace(0.5, 1.5, 20)  # Масштабы от 50% до 150%
+    for file in os.listdir('enemy_templates'):
+        enemy_templates[file] = load_template(os.path.join('enemy_templates', file))
     
-    for scale in scales:
-        resized_template = cv2.resize(enemy_template, (0, 0), fx=scale, fy=scale)
+    all_enemies = []
+
+    for enemy_template in enemy_templates.keys():
+        found_enemies = []
+        resized_template = cv2.resize(enemy_templates[enemy_template], (0, 0), fx=scale, fy=scale)
         if resized_template.shape[0] > screen_gray.shape[0] or resized_template.shape[1] > screen_gray.shape[1]:
             continue
         
         res = cv2.matchTemplate(screen_gray, resized_template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+        loc = np.where(res >= threshold)
         
-        if found is None or max_val > found[0]:
-            found = (max_val, max_loc, scale, resized_template.shape)
+        for pt in zip(*loc[::-1]):
+            top_left = pt
+            bottom_right = (top_left[0] + resized_template.shape[1], top_left[1] + resized_template.shape[0])
+            cv2.rectangle(screen_gray, top_left, bottom_right, (0, 255, 0), 2)
+            
+            bottom_left = (bottom_right[0], top_left[1] + resized_template.shape[0])
+            offset_x = -search_radius
+            offset_y = search_radius
+            click_x = int((bottom_left[0] + offset_x) * screen_width / screen_gray.shape[1])
+            click_y = int((bottom_left[1] + offset_y) * screen_height / screen_gray.shape[0])
 
-    if found and found[0] >= threshold:
-        max_val, max_loc, scale, template_shape = found
-        top_left = max_loc
-        bottom_right = (top_left[0] + template_shape[1], top_left[1] + template_shape[0])
-        cv2.rectangle(screen_gray, top_left, bottom_right, (0, 255, 0), 2)
+            if borders[0] <= click_x <= (borders[0] + borders[2]) and borders[1] <= click_y <= (borders[1] + borders[3]):
+                enemy = (click_x, click_y)
+                if not is_near_existing_enemies(enemy, found_enemies, search_radius):
+                    found_enemies.append(enemy)
         
-        bottom_left = (bottom_right[0], top_left[1] + template_shape[0])
-        
-        offset_x = -search_radius  # Отступ влево
-        offset_y = search_radius   # Отступ вниз
-        
-        click_x = int((bottom_left[0] + offset_x) * screen_width / screen_gray.shape[1])
-        click_y = int((bottom_left[1] + offset_y) * screen_height / screen_gray.shape[0])
-        
-        attack(click_x, click_y)
-        
-        max_display_width = 800  # or other desired value
-        max_display_height = 600  # or other desired value
-        screen_gray_resized = resize_image(screen_gray, max_display_width, max_display_height)
-        
+        all_enemies.append({enemy_template: found_enemies})
+
+    if DEMO:
+        max_display_width = 1920
+        max_display_height = 1080
+        # screen_gray_resized = resize_image(screen_gray, max_display_width, max_display_height)
         # cv2.imshow('Detected Enemies', screen_gray_resized)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
-        
-        return (bottom_left, (click_x, click_y))
+        cv2.imshow('Detected Enemies', screen_gray)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
     
-    else:
-        return None
+    return all_enemies
 
-def attack(click_x, click_y):
+
+def attack(enemy):
     print('Attacking the enemy...')
+    click_x, click_y = enemy
     pyautogui.doubleClick(click_x, click_y)
-    time.sleep(2)  # Подождать 3 секунды
+    
+    time.sleep(4)
 
-def battle():
     print('Make battle...')
     time.sleep(1)
     pyautogui.press('i')
     time.sleep(0.25)
     pyautogui.press('enter')
-    time.sleep(0.5)
+    time.sleep(2)
     pyautogui.press('esc')
-    time.sleep(1)
+    
+    time.sleep(0.5)
+    for _ in range(10):
+        pyautogui.typewrite(['enter'])
+        time.sleep(0.25)
 
-def recurrent():
-    print('Recurrent units...')
+    print('After battle...')
     pyautogui.typewrite(['enter'])
     pyautogui.typewrite('LIFEISACARNIVAL')
     pyautogui.typewrite(['enter'])
@@ -110,48 +126,60 @@ def recurrent():
     pyautogui.typewrite(['enter'])
     pyautogui.typewrite(['esc'])
     pyautogui.typewrite('m')
+
     time.sleep(1)
+    
+    print('Attacked OK')
+
 
 def quicksave_load():
     print('Loading quicksave...')
     pyautogui.hotkey('ctrl', 'l')
-    time.sleep(1)
+    time.sleep(2)
     pyautogui.press('esc')
-    time.sleep(0.5)
+    time.sleep(1)
     pyautogui.press('enter')
-    time.sleep(0.5)
+    time.sleep(1)
     pyautogui.press('tab')
-    time.sleep(0.5)
+    time.sleep(1)
 
-def find_disciples_window():
+
+def find_window(windows_title):
     print('Finding game...')
-    disciples_window = gw.getWindowsWithTitle('Disciples II')[0]
-    return disciples_window
+    window = gw.getWindowsWithTitle(windows_title)[0]
+    return window
+
 
 def main():
-    disciples_window = find_disciples_window()
-    if not disciples_window.isActive:
-        disciples_window.activate()
+    scale=0.6
+    threshold=0.6
+    search_radius = 20
+    max_enemies = 64
+    killed_ememies = 0
+    window = find_window('Disciples II')
+    if not window.isActive:
+        window.activate()     
         time.sleep(1)
-        quicksave_load()
-    
-        enemies = {}
-        search_radius = 20
-        
+        if QUICKSAVE_RELOAD:
+            quicksave_load()
+        enemies = set()
         while True:
-            result = scan_for_enemies(threshold=0.4, search_radius=search_radius)
-            
-            if result:
-                bottom_left, click_coords = result
-                
-                if not is_near_existing_enemies(bottom_left, enemies, search_radius):
-                    enemies[bottom_left] = click_coords
-                    battle()
-                    recurrent()
-            else:
+            detected_enemies = scan_for_enemies(scale, threshold, search_radius, borders=(window.left, window.top, window.width, window.height))
+            print(f'Detected: {detected_enemies}')
+            if DEMO:
                 break
-    
+            all_enemies = [coordinate for template in detected_enemies for coordinates in template.values() for coordinate in coordinates]
+            if not all_enemies or killed_ememies >= max_enemies:
+                break
+            if all_enemies:
+                for enemy in all_enemies:
+                    print(f'Attacted: {enemy}')
+                    attack(enemy)
+                    killed_ememies += 1
+                    print(f'{killed_ememies=}')
+
     print('Finished')
+
 
 if __name__ == "__main__":
     main()
